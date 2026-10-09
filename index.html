@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synonym Finder</title>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --primary: #4f46e5;
+    --primary-dark: #4338ca;
+    --chip: #eef2ff;
+    --border: #e5e7eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --chip: #312e81;
+      --border: #334155;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .app { width: 100%; max-width: 640px; }
+  h1 { text-align: center; margin: 8px 0 4px; font-size: 1.8rem; }
+  .sub { text-align: center; color: var(--muted); margin-bottom: 24px; }
+  .search {
+    display: flex;
+    gap: 8px;
+    background: var(--card);
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 16px rgba(0,0,0,.06);
+  }
+  .search input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 1.1rem;
+    padding: 10px 12px;
+    min-width: 0;
+  }
+  .search button {
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 0 20px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: background .2s;
+  }
+  .search button:hover { background: var(--primary-dark); }
+  .search button:disabled { opacity: .6; cursor: wait; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    margin-top: 18px;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 1.3rem; }
+  .pos {
+    display: inline-block;
+    font-size: .8rem;
+    font-style: italic;
+    color: var(--primary);
+    margin-bottom: 6px;
+  }
+  .def { color: var(--muted); margin: 4px 0 10px; font-size: .95rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    background: var(--chip);
+    color: var(--text);
+    border: none;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: .95rem;
+    cursor: pointer;
+    transition: transform .1s;
+  }
+  .chip:hover { transform: translateY(-2px); }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .toolbar button {
+    background: transparent;
+    color: var(--primary);
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    padding: 4px 12px;
+    cursor: pointer;
+  }
+  .msg { text-align: center; color: var(--muted); margin-top: 24px; }
+  .error { color: #dc2626; }
+  .spinner {
+    width: 28px; height: 28px; margin: 24px auto 0;
+    border: 3px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Synonym Finder</h1>
+  <div class="sub">اكتب أي كلمة إنجليزي وهتجيبلك المرادفات بتاعتها</div>
+
+  <form class="search" id="form">
+    <input id="word" type="text" placeholder="e.g. happy, big, important" autocomplete="off" autofocus>
+    <button id="btn" type="submit">Search</button>
+  </form>
+
+  <div id="result"></div>
+</div>
+
+<script>
+  const form = document.getElementById('form');
+  const input = document.getElementById('word');
+  const btn = document.getElementById('btn');
+  const result = document.getElementById('result');
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    search(input.value);
+  });
+
+  async function search(raw) {
+    const word = raw.trim().toLowerCase();
+    if (!word) return;
+    if (!/^[a-z][a-z\s'-]*$/.test(word)) {
+      showMessage('اكتب كلمة إنجليزي بس (حروف a-z).', true);
+      return;
+    }
+
+    input.value = word;
+    btn.disabled = true;
+    result.innerHTML = '<div class="spinner"></div>';
+
+    try {
+      // نجيب من مصدرين: القاموس (مجمّعة حسب نوع الكلمة) + Datamuse (قائمة أوسع)
+      const [dict, muse] = await Promise.all([
+        fetchDictionary(word),
+        fetchDatamuse(word)
+      ]);
+      render(word, dict, muse);
+    } catch (err) {
+      showMessage('حصلت مشكلة في الاتصال، جرّب تاني.', true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function fetchDictionary(word) {
+    try {
+      const res = await fetch('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(word));
+      if (!res.ok) return [];
+      const data = await res.json();
+      const groups = [];
+      for (const entry of data) {
+        for (const m of entry.meanings || []) {
+          const syns = new Set(m.synonyms || []);
+          (m.definitions || []).forEach(d => (d.synonyms || []).forEach(s => syns.add(s)));
+          if (syns.size) {
+            groups.push({
+              pos: m.partOfSpeech,
+              definition: (m.definitions && m.definitions[0] && m.definitions[0].definition) || '',
+              synonyms: [...syns]
+            });
+          }
+        }
+      }
+      return groups;
+    } catch {
+      return [];
+    }
+  }
+
+  async function fetchDatamuse(word) {
+    const res = await fetch('https://api.datamuse.com/words?rel_syn=' + encodeURIComponent(word) + '&max=60');
+    if (!res.ok) throw new Error('Datamuse error');
+    const data = await res.json();
+    return data.map(x => x.word);
+  }
+
+  function render(word, dictGroups, museWords) {
+    if (!dictGroups.length && !museWords.length) {
+      showMessage('مفيش مرادفات لكلمة "' + word + '". اتأكد من الإملاء أو جرّب كلمة تانية.');
+      return;
+    }
+
+    let html = '';
+
+    dictGroups.forEach(g => {
+      html += `
+        <div class="card">
+          <span class="pos">${esc(g.pos)}</span>
+          <div class="def">${esc(g.definition)}</div>
+          <div class="chips">${chips(g.synonyms)}</div>
+        </div>`;
+    });
+
+    if (museWords.length) {
+      html += `
+        <div class="card">
+          <div class="toolbar">
+            <h2>All synonyms (${museWords.length})</h2>
+            <button type="button" id="copy">Copy</button>
+          </div>
+          <div class="chips">${chips(museWords)}</div>
+        </div>`;
+    }
+
+    result.innerHTML = html;
+
+    // الضغط على أي مرادف يدوّر عليه
+    result.querySelectorAll('.chip').forEach(c =>
+      c.addEventListener('click', () => search(c.textContent))
+    );
+
+    const copyBtn = document.getElementById('copy');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(museWords.join(', '));
+          copyBtn.textContent = 'Copied ✓';
+          setTimeout(() => (copyBtn.textContent = 'Copy'), 1500);
+        } catch {
+          copyBtn.textContent = 'Failed';
+        }
+      });
+    }
+  }
+
+  function chips(list) {
+    return list.map(w => `<button type="button" class="chip">${esc(w)}</button>`).join('');
+  }
+
+  function showMessage(text, isError) {
+    result.innerHTML = `<div class="msg ${isError ? 'error' : ''}">${esc(text)}</div>`;
+    btn.disabled = false;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>
+</body>
+</html>
+  
